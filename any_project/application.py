@@ -112,7 +112,7 @@ class Actions(object):
                     try:
                         with open(new_file, 'a') as f:
                             f.write(os.path.expandvars(val).format(
-                                prompts = setup_obj.prompts,
+                                prompts = setup_obj.prompts if setup_obj is not None else None,
                                 consts = constants
                             ))
                     except (OSError, FileNotFoundError, NotADirectoryError) as e:
