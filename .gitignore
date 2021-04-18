@@ -1,2 +1,7 @@
+build/
+dist/
+Any_Project.egg-info/
 **/__pycache__/
 test_project/
+env/
+.env

@@ -5,7 +5,7 @@ from any_project import Setup
 from any_project.template import yaml_template
 from any_project.constant import Constant
 from collections import OrderedDict
-from argparse import ArgumentParser, ArgumentTypeError
+from argparse import ArgumentParser
 from yaml.loader import FullLoader
 import oyaml as yaml
 from pymsgprompt.logger import pinfo, perror, pwarn
@@ -335,7 +335,9 @@ class Actions(object):
                                 is_git_repo = False
                             if is_git_repo:
                                 if git_commit is not None:
-                                    Actions.init_and_commit_git_repo(root, git_commit)
+                                    success, exc = Actions.init_and_commit_git_repo(root, git_commit)
+                                    if not success:
+                                        perror(f"{type(exc).__name__} -> {exc}")
                 if setup_obj is not None:
                     setup_obj.do_post_validations()                    
             except (KeyError, TypeError) as e:
