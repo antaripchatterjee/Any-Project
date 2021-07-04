@@ -272,6 +272,7 @@ class Actions(object):
                                 zip.write(file_to_add_in_backup_zip)
                         pinfo(f'Created backup zip file at "{backup_zip}"')
                     else:
+                        pinfo('No files or folders found, ignoring backup process')
                         backup_zip = "<Empty/>"
                 except Exception as e:
                     perror(f"{type(e).__name__} occurred -> {e}")
@@ -303,7 +304,7 @@ class Actions(object):
                                     raise ImportError(f'Forbidden import at line {code_obj.lineno} -> ' +
                                         f'"{ast.get_source_segment(setup_code, code_obj)}"')
                             elif isinstance(code_obj, ast.ImportFrom):
-                                if not Actions.is_forbidden_importfrom(code_obj, action_name):
+                                if not Actions.is_forbidden_importfrom(code_obj):
                                     actual_source += f'\n{ast.get_source_segment(setup_code, code_obj)}'
                                 else:
                                     raise ImportError(f'Forbidden import at line {code_obj.lineno} -> ' +
@@ -368,17 +369,19 @@ class Actions(object):
                             return False
                         else:
                             git_commit = action.get('git-commit')
-                            if not isinstance(git_commit, str):
-                                if git_commit is None and action_name.strip() == 'default':
-                                    git_commit = 'Initial commit'
-                                else:
-                                    pwarn(f'Value of "git-commit" under "{action_name}" should be a string')
-                                    git_commit = None
                             try:
                                 is_git_repo = constants.git_repo
                                 if not isinstance(is_git_repo, bool): is_git_repo = False
                             except AttributeError:
                                 is_git_repo = False
+                            if not isinstance(git_commit, str):
+                                if git_commit is None and action_name.strip() == 'default':
+                                    git_commit = 'Initial commit'
+                                else:
+                                    if is_git_repo:
+                                        pwarn(f'Value of "git-commit" under "{action_name}"' +
+                                            ' should be a string')
+                                    git_commit = None
                             if is_git_repo and git_commit is not None:
                                 success, exc = Actions.init_and_commit_git_repo(root, git_commit)
                                 if not success:
