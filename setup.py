@@ -1,6 +1,7 @@
 from setuptools import setup
 from any_project import __program__
 from any_project import __version__
+from any_project import __desc__
 
 
 def readme():
@@ -12,10 +13,7 @@ def readme():
 setup(
     name=__program__,
     version=__version__,
-    description='''
-        {0} is a python module, helps to build a basic skeleton file structure of any project.
-        Current version of this module is {1}
-    '''.format(__program__, __version__),
+    description=__desc__,
     long_description=readme(),
     long_description_content_type='text/markdown',
     url="https://github.com/antaripchatterjee/Any-Project",
@@ -43,6 +41,7 @@ setup(
         'GitPython==3.1.14',
         'oyaml==1.0',
         'PyMsgPrompt==1.3.0',
+        'python-dotenv==0.17.0',
         'PyYAML==5.4.1',
         'Send2Trash==1.5.0',
         'smmap==4.0.0'

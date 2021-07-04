@@ -1,23 +1,14 @@
-from any_project import __program__
-from any_project import __version__
 from any_project import __module__
 from any_project import Setup
 from any_project.template import yaml_template
 from any_project.constant import Constant
 from collections import OrderedDict
-from argparse import ArgumentParser
 from zipfile import ZipFile
 from yaml.loader import FullLoader
 import oyaml as yaml
 from pymsgprompt.logger import pinfo, perror, pwarn
 from pymsgprompt.prompt import ask
-import os
-import re
-import ast
-import shutil
-import glob
-import git
-import tempfile
+import os, re, ast, shutil, glob, git, tempfile
 
 
 class Actions(object):
@@ -86,7 +77,6 @@ class Actions(object):
                     return False
             elif source.upper() == 'CONST':
                 temp = key
-                # key = Actions.__constants__.get(temp)
                 try:
                     key = getattr(constants, temp)
                 except AttributeError:
@@ -196,10 +186,9 @@ class Actions(object):
         return False
     
     @staticmethod
-    def is_forbidden_importfrom(code_obj: ast.ImportFrom, action_name: str):
+    def is_forbidden_importfrom(code_obj: ast.ImportFrom):
         if code_obj.module == __module__:
-            if code_obj.names[0].name not in ['Setup', 'DefaultSetup']: # + \
-                # (['DefaultSetup'] if action_name == 'default' else []):
+            if code_obj.names[0].name not in ['Setup', 'DefaultSetup']:
                 return True
             elif code_obj.names[0].asname is not None:
                 try:
@@ -265,9 +254,7 @@ class Actions(object):
                 try:
                     actual_cwd = os.getcwd()
                     os.chdir(working_dir)
-                    files_to_add_in_backup_zip = [(_file_to_add_in_backup_zip, \
-                        print(os.path.abspath(os.path.join(_file_to_add_in_backup_zip, '.git')),
-                            os.path.abspath(os.path.join(project_name, '.git'))))[0] \
+                    files_to_add_in_backup_zip = [_file_to_add_in_backup_zip \
                         for _file_to_add_in_backup_zip in glob.glob(os.path.relpath(\
                             os.path.join(project_name, '**')), recursive=True) \
                                 + glob.glob(os.path.relpath(os.path.join(project_name, '.*')), \
@@ -378,10 +365,6 @@ class Actions(object):
                                         os.chdir(actual_cwd)
                             else:
                                 pwarn('Could not find any backup!')
-                                # clear_option = ask('Do you want to clear the project structure?',
-                                #     choices=['yes', 'no'], default='no', on_error=lambda *argv: True)
-                                # if clear_option == 'yes':
-                                #     shutil.rmtree(root)
                             return False
                         else:
                             git_commit = action.get('git-commit')
@@ -406,46 +389,3 @@ class Actions(object):
                 perror(f"{type(e).__name__} -> {e}")
                 return False
         return True
-
-    @staticmethod
-    def main():
-        parser = ArgumentParser(prog=__program__,
-            description='A python based cli tool to create computer file structure or project structure from a `yaml` input.')
-        group = parser.add_mutually_exclusive_group(required=True)
-        group.add_argument('-init', action='store', type=str, default=None, help='Initialize a project')
-        group.add_argument('-build', action='store', type=str, default=None, help='Build a project from a initialized yaml code')
-        parser.add_argument('-v', action='version', version='%(prog)s - ' + __version__)
-        parser.add_argument('-version', action='version', version=__version__)
-        results = parser.parse_args()
-
-        if results.init is not None:
-            pattern = r'^([^\:]+)(?:\:([a-z0-9_][a-z0-9_\-]*))?$'
-            m = re.match(pattern, results.init.strip(), flags=re.IGNORECASE)
-            if m is None:
-                parser.error('argument value of `-init` is invalid')
-            else:
-                target_dir, project_name = m.groups()
-            target_dir = os.path.abspath(target_dir)
-            project_name = re.sub(r'[^a-z0-9_\-]', '_', \
-                os.path.basename(target_dir), flags=re.IGNORECASE) \
-                    if project_name is None else project_name
-            project_structure_yaml = Actions.init(target_dir, project_name)
-            if project_structure_yaml is None :
-                perror('Could not initialize project structure.')
-                exit(-1)
-            else:
-                pinfo(f'Project structure created at "{project_structure_yaml}"')
-        else:
-            pattern = r'^([^\:\?]+)(?:\:([a-z_][a-z0-9_]*))?' + \
-                '(?:\?((?:[a-z_][a-z_0-9]*)(?:\;[a-z_][a-z0-9_]*)*))?$'
-            m = re.match(pattern, results.build.strip(), flags=re.IGNORECASE)
-            if m is None:
-                parser.error('argument value of `-build` is invalid')
-            else:
-                target_dir, action_name, tasks = m.groups()
-                if action_name is None:
-                    action_name = 'default'
-            target_dir = os.path.abspath(target_dir)
-            value = os.path.join(target_dir, 'project-structure.yaml')
-            Actions.build(value, action_name, tasks)
-
