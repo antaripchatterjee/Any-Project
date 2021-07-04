@@ -1,6 +1,7 @@
 import abc
 from .prompt import Prompts
 
+
 class Setup(abc.ABC):
     def __init__(self, constants):
         self.prompts = Prompts()
@@ -12,7 +13,7 @@ class Setup(abc.ABC):
         self.get_constant = lambda key: try_getattr(key)
     
     @abc.abstractmethod
-    def do_pre_validations(self):
+    def pre_validations(self):
         pass
 
     @abc.abstractmethod
@@ -20,11 +21,11 @@ class Setup(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def do_task_on(self, task):
+    def on_task(self, task):
         pass
 
     @abc.abstractmethod
-    def do_post_validations(self):
+    def post_validations(self):
         pass
 
     def on_create_file(self, filename):
@@ -35,16 +36,16 @@ class Setup(abc.ABC):
 
 
 class DefaultSetup(Setup):        
-    def do_pre_validations(self):
+    def pre_validations(self):
         pass
 
     def set_prompts(self):
         pass
 
-    def do_task_on(self, task):
+    def on_task(self, task):
         pass
 
-    def do_post_validations(self):
+    def post_validations(self):
         pass
 
 

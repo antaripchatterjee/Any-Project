@@ -1,4 +1,4 @@
-from .application import Actions
+from any_project.application import Actions
 from dotenv import load_dotenv
 import os
 

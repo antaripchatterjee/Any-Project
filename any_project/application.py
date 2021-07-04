@@ -6,6 +6,7 @@ from any_project.template import yaml_template
 from any_project.constant import Constant
 from collections import OrderedDict
 from argparse import ArgumentParser
+from zipfile import ZipFile
 from yaml.loader import FullLoader
 import oyaml as yaml
 from pymsgprompt.logger import pinfo, perror, pwarn
@@ -14,13 +15,16 @@ import os
 import re
 import ast
 import shutil
+import glob
 import git
+import tempfile
 
 
 class Actions(object):
     @staticmethod
-    def init(target_dir, project_name):
-        YAML_CODE_DICT = yaml_template(project_name, os.path.relpath(target_dir))
+    def init(target_dir, project_name, template_generator=None):
+        YAML_CODE_DICT = yaml_template(project_name,
+            os.path.relpath(target_dir), template_generator)
         try:
             os.makedirs(target_dir, exist_ok=True)
         except FileNotFoundError as e:
@@ -29,13 +33,12 @@ class Actions(object):
         project_structure_yaml = os.path.join(target_dir, 'project-structure.yaml')
         overwrite_option = None
         if os.path.isfile(project_structure_yaml):
-            overwrite_option = ask('Do you want to overwrite the existing project structure?', choices=['yes', 'no'], default='no',
-                on_error=lambda *argv: True)
+            overwrite_option = ask('Do you want to overwrite the existing project structure?', \
+                choices=['yes', 'no'], default='no', on_error=lambda *argv: True)
         else:
             overwrite_option = 'yes'
         if overwrite_option == 'yes':
             with open(project_structure_yaml, 'w') as f:
-                # f.write(YAML_CODE_STR)
                 yaml.dump(YAML_CODE_DICT, f, indent=4)
         else:
             pwarn('Action has been prevented by user!')
@@ -50,6 +53,12 @@ class Actions(object):
             except git.exc.InvalidGitRepositoryError:
                 pinfo('Initializing as a git repo')
                 repo = git.Repo.init(root)
+            git_ignore = os.path.relpath(
+                os.path.join(root, '.gitignore')
+            )
+            if not os.path.isfile(git_ignore):
+                pinfo('Creating a git ignore file')
+                open(git_ignore, 'w').close()
             pinfo('Adding all the files')
             repo.git.add(A=True)
             pinfo(f'Commit begin\nMessage:')
@@ -58,8 +67,6 @@ class Actions(object):
             return True, None
         except Exception as e:
             return False, e
-
-
 
     @staticmethod
     def expand_file_structure(root, structure, setup_obj, constants):
@@ -225,7 +232,8 @@ class Actions(object):
             project_name = yaml_data.get('project-name')
             working_dir = yaml_data.get('working-dir')
             if not isinstance(project_name, str) or not isinstance(working_dir, str):
-                pwarn(f'Could not find valid data for "project-name" and "working-dir" inside {structure}')
+                pwarn('Could not find valid data for "project-name" and "working-dir" ' +
+                    f'inside {structure}')
                 return False
             try:
                 envionment = yaml_data.get('environment', {})
@@ -252,17 +260,50 @@ class Actions(object):
                     })
                 else:
                     constants = None
+                working_dir = os.path.relpath(working_dir)
+                root = os.path.relpath(os.path.join(working_dir, project_name))
+                try:
+                    actual_cwd = os.getcwd()
+                    os.chdir(working_dir)
+                    files_to_add_in_backup_zip = [(_file_to_add_in_backup_zip, \
+                        print(os.path.abspath(os.path.join(_file_to_add_in_backup_zip, '.git')),
+                            os.path.abspath(os.path.join(project_name, '.git'))))[0] \
+                        for _file_to_add_in_backup_zip in glob.glob(os.path.relpath(\
+                            os.path.join(project_name, '**')), recursive=True) \
+                                + glob.glob(os.path.relpath(os.path.join(project_name, '.*')), \
+                                    recursive=True) if os.path.exists(_file_to_add_in_backup_zip) and \
+                                        os.path.abspath(_file_to_add_in_backup_zip) != \
+                                            os.path.abspath(os.path.join(project_name, '.git'))]
+
+                    if len(files_to_add_in_backup_zip) > 0:
+                        os.makedirs(os.path.relpath('backups'), exist_ok=True)
+                        backup_zip = tempfile.mkstemp(suffix='.zip', prefix=f'backup-{project_name}-', \
+                            dir=os.path.relpath('backups'))[1]
+
+                        with ZipFile(backup_zip, 'w') as zip:
+                            for file_to_add_in_backup_zip in files_to_add_in_backup_zip:
+                                zip.write(file_to_add_in_backup_zip)
+                        pinfo(f'Created backup zip file at "{backup_zip}"')
+                    else:
+                        backup_zip = "<Empty/>"
+                except Exception as e:
+                    perror(f"{type(e).__name__} occurred -> {e}")
+                    backup_zip = None
+                finally:
+                    os.chdir(actual_cwd)
 
                 if action_name in yaml_data['boilerplates'].keys():
                     action = yaml_data['boilerplates'][action_name]
                 else:
-                    raise KeyError(f'Could not find the boilerplate structure for action "{action_name}"')
+                    raise KeyError('Could not find the boilerplate structure ' +
+                        f'for action "{action_name}"')
                 setup_code = action.get('setup')
                 setup_obj = None
                 class_def_line_no = 0
                 if setup_code is not None:
                     if not isinstance(setup_code, str):
-                        raise TypeError(f'setup_code should be a valid python source code in action "{action_name}"')
+                        raise TypeError('setup_code should be a valid python source ' +
+                            f'code in action "{action_name}"')
                     else:
                         source_code_tree = ast.parse(setup_code)
                         setup_class_name = f'{action_name.strip().title()}Setup'
@@ -282,37 +323,26 @@ class Actions(object):
                                         f'"{ast.get_source_segment(setup_code, code_obj)}"')
                             elif isinstance(code_obj, ast.ClassDef):
                                 if code_obj.name == setup_class_name:
-                                    # print(code_obj.bases[0].id)
-                                    # if 'Setup' in [base.id for base in code_obj.bases]:
-                                    #     actual_source += f'\n\n{ast.get_source_segment(setup_code, code_obj)}'
-                                    # else:
-                                    #     raise SyntaxWarning(f'Setup class "{code_obj.name}" at line {code_obj.lineno} '+
-                                    #         'must inherit from "any_project.Setup" class')
                                     actual_source += f'\n\n{ast.get_source_segment(setup_code, code_obj)}'
                                     class_def_line_no = code_obj.lineno
                                 else:
-                                    raise SyntaxWarning(f'Forbidden class definition at line {code_obj.lineno} ->' +
-                                        f' "{code_obj.name}"')
+                                    raise SyntaxWarning('Forbidden class definition at line ' +
+                                        f'{code_obj.lineno} -> "{code_obj.name}"')
                             else:
                                 raise SyntaxWarning(f'Invalid code definition at line {code_obj.lineno}')
 
                     exec(actual_source, globals())
                     SetupClass = eval(setup_class_name)
                     if not issubclass(SetupClass, Setup):
-                        raise SyntaxWarning(f'Setup class "{setup_class_name}" at line {class_def_line_no} '+
+                        raise SyntaxWarning(f'Setup class "{setup_class_name}" ' +
+                            f'at line {class_def_line_no} '+
                             'must inherit from "any_project.Setup" class')
                     # setup_obj = eval(f'{setup_class_name}(constants)')
                     setup_obj = SetupClass(constants)
-                    setup_obj.do_pre_validations()
+                    setup_obj.pre_validations()
                     setup_obj.set_prompts()
                     for task in (tasks.split(';') if tasks is not None else []):
-                        setup_obj.do_task_on(task=task)
-
-                git_commit = action.get('git-commit')
-                if not isinstance(git_commit, str):
-                    if git_commit is not None:
-                        pwarn(f'Value of "git-commit" under "{action}" should be a string')
-                    git_commit = None
+                        setup_obj.on_task(task=task)
 
                 structure_ = action.get('structure', {})
                 if structure_ is not None:
@@ -320,26 +350,58 @@ class Actions(object):
                         raise TypeError(f'Invalid file structure_ for action "{action_name}"')
                     else:
                         # print(structure)
-                        working_dir = os.path.relpath(working_dir)
-                        root = os.path.relpath(os.path.join(working_dir, project_name))
+                        pinfo(f'Creating ROOT directory: "{root}"')
                         os.makedirs(root, exist_ok=True)
                         if not Actions.expand_file_structure(root, structure_, setup_obj, constants):
-                            shutil.rmtree(root)
+                            if backup_zip is not None:
+                                if backup_zip != '<Empty/>':
+                                    for _file_or_dir in [_dir for _dir in os.listdir(root)\
+                                        if _dir != '.git']:
+                                        try:
+                                            shutil.rmtree(os.path.relpath(os.path.join(root, \
+                                                _file_or_dir)))
+                                        except NotADirectoryError:
+                                            os.unlink(os.path.relpath(os.path.join(root, \
+                                                _file_or_dir)))
+                                        except PermissionError as e:
+                                            pwarn(f"{type(e).__name__} occurred -> {e}")
+                                    actual_cwd = os.getcwd()
+                                    try:
+                                        os.chdir(working_dir)
+                                        print(f'Backing up from "{backup_zip}"')
+                                        with ZipFile(backup_zip, 'r') as zip:
+                                            zip.printdir()
+                                            zip.extractall()
+                                    except Exception as e:
+                                        perror(f"Error occured while taking backup, {type(e).__name__} -> {e}")
+                                    finally:
+                                        os.chdir(actual_cwd)
+                            else:
+                                pwarn('Could not find any backup!')
+                                # clear_option = ask('Do you want to clear the project structure?',
+                                #     choices=['yes', 'no'], default='no', on_error=lambda *argv: True)
+                                # if clear_option == 'yes':
+                                #     shutil.rmtree(root)
                             return False
                         else:
+                            git_commit = action.get('git-commit')
+                            if not isinstance(git_commit, str):
+                                if git_commit is None and action_name.strip() == 'default':
+                                    git_commit = 'Initial commit'
+                                else:
+                                    pwarn(f'Value of "git-commit" under "{action_name}" should be a string')
+                                    git_commit = None
                             try:
                                 is_git_repo = constants.git_repo
-                                if not isinstance(is_git_repo, bool):
-                                    is_git_repo = False
+                                if not isinstance(is_git_repo, bool): is_git_repo = False
                             except AttributeError:
                                 is_git_repo = False
-                            if is_git_repo:
-                                if git_commit is not None:
-                                    success, exc = Actions.init_and_commit_git_repo(root, git_commit)
-                                    if not success:
-                                        perror(f"{type(exc).__name__} -> {exc}")
+                            if is_git_repo and git_commit is not None:
+                                success, exc = Actions.init_and_commit_git_repo(root, git_commit)
+                                if not success:
+                                    perror(f"{type(exc).__name__} -> {exc}")
                 if setup_obj is not None:
-                    setup_obj.do_post_validations()                    
+                    setup_obj.post_validations()                    
             except (KeyError, TypeError) as e:
                 perror(f"{type(e).__name__} -> {e}")
                 return False
@@ -364,8 +426,9 @@ class Actions(object):
             else:
                 target_dir, project_name = m.groups()
             target_dir = os.path.abspath(target_dir)
-            project_name = re.sub(r'[^a-z0-9_\-]', '_', os.path.basename(target_dir), flags=re.IGNORECASE) \
-                if project_name is None else project_name
+            project_name = re.sub(r'[^a-z0-9_\-]', '_', \
+                os.path.basename(target_dir), flags=re.IGNORECASE) \
+                    if project_name is None else project_name
             project_structure_yaml = Actions.init(target_dir, project_name)
             if project_structure_yaml is None :
                 perror('Could not initialize project structure.')
@@ -373,7 +436,8 @@ class Actions(object):
             else:
                 pinfo(f'Project structure created at "{project_structure_yaml}"')
         else:
-            pattern = r'^([^\:\?]+)(?:\:([a-z_][a-z0-9_]*))?(?:\?((?:[a-z_][a-z_0-9]*)(?:\;[a-z_][a-z0-9_]*)*))?$'
+            pattern = r'^([^\:\?]+)(?:\:([a-z_][a-z0-9_]*))?' + \
+                '(?:\?((?:[a-z_][a-z_0-9]*)(?:\;[a-z_][a-z0-9_]*)*))?$'
             m = re.match(pattern, results.build.strip(), flags=re.IGNORECASE)
             if m is None:
                 parser.error('argument value of `-build` is invalid')
@@ -385,4 +449,3 @@ class Actions(object):
             value = os.path.join(target_dir, 'project-structure.yaml')
             Actions.build(value, action_name, tasks)
 
-# print(locals())

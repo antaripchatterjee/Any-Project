@@ -1,4 +1,2 @@
-
-
 class Prompts():
     pass

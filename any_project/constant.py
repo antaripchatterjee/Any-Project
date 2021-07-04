@@ -10,3 +10,4 @@ class Constant(object):
     
     def __get__(self, instance, owner):
         return self.__value__
+        

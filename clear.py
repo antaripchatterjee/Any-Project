@@ -13,7 +13,8 @@ if __name__ == '__main__':
                 )
             ),
             ignore_errors=True,
-            onerror= lambda func, _path, exception : sys.stdout.write('{0} could not be deleted : {1}\n'.format(_path, exception))
+            onerror= lambda _, _path, exception : \
+                sys.stdout.write('{0} could not be deleted : {1}\n'.format(_path, exception))
         )
     shutil.rmtree(
         path.abspath(
@@ -24,7 +25,9 @@ if __name__ == '__main__':
             )
         ),
         ignore_errors=True,
-        onerror= lambda func, _path, exception : sys.stdout.write('{0} could not be deleted : {1}\n'.format(_path, exception))
+        onerror= lambda _, _path, exception : \
+            sys.stdout.write('{0} could not be deleted : {1}\n'.format(_path, exception))
     )
     for f in glob(path.abspath(path.join(self_dir, 'any_project', '*.pyc'))):
         remove(f)
+        
