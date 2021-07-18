@@ -3,15 +3,10 @@ from .prompt import Prompts
 
 
 class Setup(abc.ABC):
-    def __init__(self, constants):
+    def __init__(self, action_name):
         self.prompts = Prompts()
-        def try_getattr(key, constants=constants):
-            try:
-                return getattr(constants, key)
-            except AttributeError:
-                return None
-        self.get_constant = lambda key: try_getattr(key)
-    
+        self.current_action = action_name
+
     @abc.abstractmethod
     def pre_validations(self):
         pass

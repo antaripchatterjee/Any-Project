@@ -2,13 +2,13 @@ from any_project import __module__
 from any_project import Setup
 from any_project.template import yaml_template
 from any_project.constant import Constant
+from any_project.internal import InternalActions
 from collections import OrderedDict
-from zipfile import ZipFile
 from yaml.loader import FullLoader
 import oyaml as yaml
 from pymsgprompt.logger import pinfo, perror, pwarn
 from pymsgprompt.prompt import ask
-import os, re, ast, shutil, glob, git, tempfile
+import os, re, ast
 
 
 class Actions(object):
@@ -35,179 +35,10 @@ class Actions(object):
             pwarn('Action has been prevented by user!')
             return None
         return project_structure_yaml
-
+        
     @staticmethod
-    def init_and_commit_git_repo(root, msg):
-        try:
-            try:
-                repo = git.Repo(root)
-            except git.exc.InvalidGitRepositoryError:
-                pinfo('Initializing as a git repo')
-                repo = git.Repo.init(root)
-            git_ignore = os.path.relpath(
-                os.path.join(root, '.gitignore')
-            )
-            if not os.path.isfile(git_ignore):
-                pinfo('Creating a git ignore file')
-                open(git_ignore, 'w').close()
-            pinfo('Adding all the files')
-            repo.git.add(A=True)
-            pinfo(f'Commit begin\nMessage:')
-            print(msg)
-            repo.git.commit(m=msg)
-            return True, None
-        except Exception as e:
-            return False, e
-
-    @staticmethod
-    def expand_file_structure(root, structure, setup_obj, constants):
-        for key, val in structure.items():
-            key = key.strip()
-            source = ''
-            m = re.match(r'^\$(env|prompt|const)\:([^\s].*)$', key, flags=re.IGNORECASE)
-            if m is not None:
-                source, key = m.groups()
-            if source.upper() == 'ENV':
-                temp = key
-                key = os.environ.get(temp)
-                if not isinstance(key, str):
-                    key = ''
-                if key.strip() == '':
-                    pwarn(f'Could not find enviornment value of key "{temp}"')
-                    return False
-            elif source.upper() == 'CONST':
-                temp = key
-                try:
-                    key = getattr(constants, temp)
-                except AttributeError:
-                    key = ''
-                if not isinstance(key, str):
-                    key = ''
-                if key.strip() == '':
-                    pwarn(f'Could not find constant value of key "{temp}"')
-                    return False
-            elif source.upper() == 'PROMPT':
-                if setup_obj is None:
-                    perror('No setup class has been created!')
-                    return False
-                temp = key
-                key = setup_obj.prompts.__dict__.get(temp)
-                if not isinstance(key, str):
-                    key = ''
-                if key.strip() == '':
-                    perror(f'Could not find a valid value of the prompt "{temp}"')
-                    return False
-
-            if isinstance(val, str):
-                new_file = os.path.relpath(os.path.join(root, key))
-                if setup_obj is None:
-                    write_file = True
-                else:
-                    write_file = setup_obj.on_create_file(new_file)
-                if write_file:
-                    pinfo(f'Creating file  : {new_file}')
-                    try:
-                        with open(new_file, 'a') as f:
-                            f.write(os.path.expandvars(val).format(
-                                prompts = setup_obj.prompts if setup_obj is not None else None,
-                                consts = constants
-                            ))
-                    except (OSError, FileNotFoundError, NotADirectoryError) as e:
-                        perror(f'Could not create file - {type(e).__name__}:{e}')
-                        return False
-                    except (KeyError, AttributeError) as e:
-                        pwarn(f'{type(e).__name__} occurred while writing the file')
-                        perror(f"Message: {e}")
-                        return False
-            else:
-                if val is None:
-                    new_folder = os.path.relpath(os.path.join(root, key))
-                    if setup_obj is None:
-                        write_directory = True
-                    else:
-                        write_directory = setup_obj.on_create_folder(new_folder)
-                    if write_directory:
-                        pinfo(f'Creating folder: {new_folder}')
-                        try:
-                            os.makedirs(new_folder, exist_ok=True)
-                        except (OSError, FileNotFoundError, NotADirectoryError) as e:
-                            perror(f'Could not create folder - {type(e).__name__}:{e}')
-                            return False
-                elif isinstance(val, (dict, OrderedDict)):
-                    new_folder = os.path.relpath(os.path.join(root, key))
-                    if setup_obj is None:
-                        write_directory = True
-                    else:
-                        write_directory = setup_obj.on_create_folder(new_folder)
-                    if write_directory:
-                        pinfo(f'Creating folder: {new_folder}')
-                        try:
-                            os.makedirs(new_folder, exist_ok=True)
-                            if not Actions.expand_file_structure(new_folder, val, setup_obj, constants):
-                                return False
-                        except (OSError, FileNotFoundError, NotADirectoryError) as e:
-                            perror(f'Could not create folder - {type(e).__name__}:{e}')
-                            return False
-                elif isinstance(val, (tuple, list)):
-                    new_folder = os.path.relpath(os.path.join(root, key))
-                    if setup_obj is None:
-                        write_directory = True
-                    else:
-                        write_directory = setup_obj.on_create_folder(new_folder)
-                    if write_directory:
-                        pinfo(f'Creating folder: {new_folder}')
-                        try:
-                            os.makedirs(new_folder, exist_ok=True)
-                            final_inner_value = {}
-                            for val_ in val:
-                                if isinstance(val_, (dict, OrderedDict)):
-                                    for key_ in val_.keys():
-                                        if key_ in final_inner_value.keys():
-                                            pwarn(f'Can not create duplicate folder {key_} inside {new_folder}')
-                                            return False
-                                    final_inner_value.update(val_)
-                            if not Actions.expand_file_structure(new_folder, final_inner_value, setup_obj, constants):
-                                return False
-                        except (OSError, FileNotFoundError, NotADirectoryError) as e:
-                            perror(f'Could not create folder - {type(e).__name__}:{e}')
-                            return False
-        return True
-
-    @staticmethod
-    def is_forbidden_import(code_obj: ast.Import):
-        if code_obj.names[0].name.startswith(__module__):
-            return True
-        elif code_obj.names[0].asname is not None:
-            try:
-                eval(f'lambda: {code_obj.names[0].asname}')()
-                return True
-            except NameError:
-                pass
-        return False
-    
-    @staticmethod
-    def is_forbidden_importfrom(code_obj: ast.ImportFrom):
-        if code_obj.module == __module__:
-            if code_obj.names[0].name not in ['Setup', 'DefaultSetup']:
-                return True
-            elif code_obj.names[0].asname is not None:
-                try:
-                    eval(f'lambda: {code_obj.names[0].asname}')()
-                    return True
-                except NameError:
-                    pass
-        elif code_obj.module.startswith(__module__):
-            return True
-        elif code_obj.names[0].asname is not None:
-            try:
-                eval(f'lambda: {code_obj.names[0].asname}')()
-                return True
-            except NameError:
-                pass
-        return False
-
-    @staticmethod
-    def build(structure, action_name, tasks):
+    def build(structure, action_name, tasks, delete_backup_on_success=None):
+        backup_zip = None
         if not os.path.isfile(structure):
             perror(f'Could not find the project-structure.yaml file, given {structure}')
             return False
@@ -251,34 +82,8 @@ class Actions(object):
                     constants = None
                 working_dir = os.path.relpath(working_dir)
                 root = os.path.relpath(os.path.join(working_dir, project_name))
-                try:
-                    actual_cwd = os.getcwd()
-                    os.chdir(working_dir)
-                    files_to_add_in_backup_zip = [_file_to_add_in_backup_zip \
-                        for _file_to_add_in_backup_zip in glob.glob(os.path.relpath(\
-                            os.path.join(project_name, '**')), recursive=True) \
-                                + glob.glob(os.path.relpath(os.path.join(project_name, '.*')), \
-                                    recursive=True) if os.path.exists(_file_to_add_in_backup_zip) and \
-                                        os.path.abspath(_file_to_add_in_backup_zip) != \
-                                            os.path.abspath(os.path.join(project_name, '.git'))]
-
-                    if len(files_to_add_in_backup_zip) > 0:
-                        os.makedirs(os.path.relpath('backups'), exist_ok=True)
-                        backup_zip = tempfile.mkstemp(suffix='.zip', prefix=f'backup-{project_name}-', \
-                            dir=os.path.relpath('backups'))[1]
-
-                        with ZipFile(backup_zip, 'w') as zip:
-                            for file_to_add_in_backup_zip in files_to_add_in_backup_zip:
-                                zip.write(file_to_add_in_backup_zip)
-                        pinfo(f'Created backup zip file at "{backup_zip}"')
-                    else:
-                        pinfo('No files or folders found, ignoring backup process')
-                        backup_zip = "<Empty/>"
-                except Exception as e:
-                    perror(f"{type(e).__name__} occurred -> {e}")
-                    backup_zip = None
-                finally:
-                    os.chdir(actual_cwd)
+                
+                backup_zip = InternalActions.take_safe_backup(working_dir, project_name)
 
                 if action_name in yaml_data['boilerplates'].keys():
                     action = yaml_data['boilerplates'][action_name]
@@ -298,13 +103,13 @@ class Actions(object):
                         actual_source = ''
                         for code_obj in source_code_tree.body:
                             if isinstance(code_obj, ast.Import):
-                                if not Actions.is_forbidden_import(code_obj):
+                                if not InternalActions.is_forbidden_import(code_obj):
                                     actual_source += f'\n{ast.get_source_segment(setup_code, code_obj)}'
                                 else:
                                     raise ImportError(f'Forbidden import at line {code_obj.lineno} -> ' +
                                         f'"{ast.get_source_segment(setup_code, code_obj)}"')
                             elif isinstance(code_obj, ast.ImportFrom):
-                                if not Actions.is_forbidden_importfrom(code_obj):
+                                if not InternalActions.is_forbidden_importfrom(code_obj):
                                     actual_source += f'\n{ast.get_source_segment(setup_code, code_obj)}'
                                 else:
                                     raise ImportError(f'Forbidden import at line {code_obj.lineno} -> ' +
@@ -325,8 +130,7 @@ class Actions(object):
                         raise SyntaxWarning(f'Setup class "{setup_class_name}" ' +
                             f'at line {class_def_line_no} '+
                             'must inherit from "any_project.Setup" class')
-                    # setup_obj = eval(f'{setup_class_name}(constants)')
-                    setup_obj = SetupClass(constants)
+                    setup_obj = SetupClass(action_name)
                     setup_obj.pre_validations()
                     setup_obj.set_prompts()
                     for task in (tasks.split(';') if tasks is not None else []):
@@ -337,35 +141,13 @@ class Actions(object):
                     if not isinstance(structure_, (dict, OrderedDict)):
                         raise TypeError(f'Invalid file structure_ for action "{action_name}"')
                     else:
-                        # print(structure)
-                        pinfo(f'Creating ROOT directory: "{root}"')
+                        if not os.path.isdir(root):
+                            pinfo(f'Creating ROOT directory: "{root}"')
                         os.makedirs(root, exist_ok=True)
-                        if not Actions.expand_file_structure(root, structure_, setup_obj, constants):
-                            if backup_zip is not None:
-                                if backup_zip != '<Empty/>':
-                                    for _file_or_dir in [_dir for _dir in os.listdir(root)\
-                                        if _dir != '.git']:
-                                        try:
-                                            shutil.rmtree(os.path.relpath(os.path.join(root, \
-                                                _file_or_dir)))
-                                        except NotADirectoryError:
-                                            os.unlink(os.path.relpath(os.path.join(root, \
-                                                _file_or_dir)))
-                                        except PermissionError as e:
-                                            pwarn(f"{type(e).__name__} occurred -> {e}")
-                                    actual_cwd = os.getcwd()
-                                    try:
-                                        os.chdir(working_dir)
-                                        print(f'Backing up from "{backup_zip}"')
-                                        with ZipFile(backup_zip, 'r') as zip:
-                                            zip.printdir()
-                                            zip.extractall()
-                                    except Exception as e:
-                                        perror(f"Error occured while taking backup, {type(e).__name__} -> {e}")
-                                    finally:
-                                        os.chdir(actual_cwd)
-                            else:
-                                pwarn('Could not find any backup!')
+                        if not InternalActions.expand_file_structure( \
+                            root, structure_, setup_obj, constants):
+                            InternalActions.restore_safe_backup( \
+                                root, working_dir, backup_zip)
                             return False
                         else:
                             git_commit = action.get('git-commit')
@@ -383,7 +165,7 @@ class Actions(object):
                                             ' should be a string')
                                     git_commit = None
                             if is_git_repo and git_commit is not None:
-                                success, exc = Actions.init_and_commit_git_repo(root, git_commit)
+                                success, exc = InternalActions.add_git_commit(root, git_commit)
                                 if not success:
                                     perror(f"{type(exc).__name__} -> {exc}")
                 if setup_obj is not None:
@@ -391,4 +173,18 @@ class Actions(object):
             except (KeyError, TypeError) as e:
                 perror(f"{type(e).__name__} -> {e}")
                 return False
+        if delete_backup_on_success is None \
+            and backup_zip is not None and os.path.isfile(backup_zip):
+            should_delete_backup = ask('Do you want to delete the backup zip?', \
+                choices=['yes', 'no'], default='no', on_error=lambda *argv: True)
+            delete_backup_on_success = should_delete_backup == 'yes'
+        else:
+            delete_backup_on_success = False
+        if delete_backup_on_success:
+            pinfo(f'Deleting backup "{backup_zip}"')
+            try:
+                os.unlink(backup_zip)
+            except (FileNotFoundError, PermissionError) as e:
+                perror(f'{type(e).__name__} occurred -> {e}')
+                pwarn(f'Could not delete the backup "{backup_zip}"')
         return True
