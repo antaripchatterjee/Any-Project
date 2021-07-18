@@ -1,0 +1,63 @@
+project-name: Test
+working-dir: test_project
+constants:
+    version: 0.0.1
+    license: null
+    creation_utctime: 04-Jul-2021 16:28:52 UTC+0:00
+    creation_localtime: 04-Jul-2021 21:58:52 T+5:30
+    author: Antarip-PC
+    email_id: null
+    git_repo: false
+    platform: win32
+environment:
+    PROJECT_NAME: Test
+boilerplates:
+    default:
+        setup: from any_project import DefaultSetup
+        structure:
+            components:
+                templates:
+                    __init__.py: |
+                        # This is __init__.py
+                    app.py: |
+                        # This is app.py
+                    ispan.py: |
+                        # This is ispan.py
+                __init__.py: |
+                    # This is __init__.py
+                index.py: |
+                    # This is index.py
+                app.py: |
+                    # This is app.py
+            static:
+                images:
+                src:
+                    callback.js: |
+                        // This is callback.js
+                    index.js: |
+                        // This is index.js
+                css:
+                    style.css: |
+                        /* This is style.css */
+    readme:
+        setup: |
+            from any_project import DefaultSetup
+            
+            class ReadmeSetup(DefaultSetup) : pass
+        structure:
+            components:
+                templates:
+                    __init__.py: |
+                        # These are some new changes.
+                    README.md: |
+                        # This is README
+    extra:
+        setup: |
+            from any_project import DefaultSetup
+            
+            class ExtraSetup(DefaultSetup): pass
+        structure:
+            components:
+                templates:
+                    README.md: |
+                        -2: hhh

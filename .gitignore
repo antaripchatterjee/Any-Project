@@ -2,7 +2,8 @@ build/
 dist/
 Any_Project.egg-info/
 **/__pycache__/
-test_project/
+test_project/backups
+test_project/Test
 env/
 base/
 backups/
