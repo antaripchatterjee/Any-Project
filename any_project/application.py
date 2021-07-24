@@ -96,14 +96,15 @@ class Actions(object):
             working_dir, project_name
         )
         if error_occured:
+            if backup_zip is not None:
+                pinfo('Deleting corrupted safety backup')
+                os.unlink(backup_zip)
             return BuildActionData(
                 status=False,
                 root=root,
                 cwd=working_dir,
-                backup_zip=backup_zip,
-                delete_backup=True if os.path.isfile(
-                    '' if backup_zip is None else backup_zip) \
-                         else False
+                backup_zip=None,
+                delete_backup=False
             )
         
         # Get the action's architecture
