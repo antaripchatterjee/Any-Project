@@ -1,6 +1,21 @@
 import abc
 from .prompt import Prompts
 
+class ValidationError(Exception):
+    pass
+
+
+class ValidationResult:
+    def __init__(self, successful, msg):
+        self.__successful = successful
+        self.__msg = msg
+
+    @property
+    def successful(self): return self.__successful
+
+    @property
+    def message(self): return self.__msg
+
 
 class Setup(abc.ABC):
     def __init__(self, action_name):
@@ -8,7 +23,7 @@ class Setup(abc.ABC):
         self.current_action = action_name
 
     @abc.abstractmethod
-    def pre_validations(self):
+    def pre_validation(self):
         pass
 
     @abc.abstractmethod
@@ -20,7 +35,7 @@ class Setup(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def post_validations(self):
+    def post_validation(self):
         pass
 
     def on_create_file(self, filename):
@@ -31,8 +46,8 @@ class Setup(abc.ABC):
 
 
 class DefaultSetup(Setup):        
-    def pre_validations(self):
-        pass
+    def pre_validation(self):
+        return ValidationResult(True, None)
 
     def set_prompts(self):
         pass
@@ -40,7 +55,7 @@ class DefaultSetup(Setup):
     def on_task(self, task):
         pass
 
-    def post_validations(self):
-        pass
+    def post_validation(self):
+        return ValidationResult(True, None)
 
 

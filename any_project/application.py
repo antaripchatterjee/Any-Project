@@ -2,13 +2,14 @@ from any_project import __module__
 from any_project import Setup
 from any_project.template import yaml_template
 from any_project.constant import Constant
-from any_project.internal import InternalActions
+from any_project.internal import BuildActionData, InternalActions
 from collections import OrderedDict
-from yaml.loader import FullLoader
 import oyaml as yaml
 from pymsgprompt.logger import pinfo, perror, pwarn
 from pymsgprompt.prompt import ask
-import os, re, ast
+import os, re
+from any_project.setup import ValidationError
+from any_project.setup import ValidationResult
 
 
 class Actions(object):
@@ -37,154 +38,284 @@ class Actions(object):
         return project_structure_yaml
         
     @staticmethod
-    def build(structure, action_name, tasks, delete_backup_on_success=None):
-        backup_zip = None
-        if not os.path.isfile(structure):
-            perror(f'Could not find the project-structure.yaml file, given {structure}')
-            return False
-        else:
-            with open(structure) as f:
+    @InternalActions.post_build_activity
+    def build(structure, action_name, tasks, delete_backup=None):
+        # Complete the precheck before building the structure project
+        precheck_result = InternalActions.any_project_precheck(structure)
+        if precheck_result is None:
+            return BuildActionData(status=False)
+        
+        # Initialize the local variables
+        yaml_data, working_dir, project_name = precheck_result
+        backup_zip, root = None, None
+        
+        # Load the environment variables
+        try:
+            envionment = yaml_data.get('environment')
+            if envionment is not None:
+                if not isinstance(envionment, (dict, OrderedDict)):
+                    raise TypeError(f'Invalid data of "environment" inside "{structure}"')
+                pinfo('Adding environment variables')
+                os.environ.update({
+                    env_key.strip() : env_val \
+                        for env_key, env_val in envionment.items()
+                })
+        except TypeError as e:
+            perror(f'{e}')
+            return BuildActionData(status=False)
+
+        # Load the any-project constants
+        try:
+            temp_constants = yaml_data.get('constants')
+            if temp_constants is None:
+                constants = type('Constants', (object, ), {})
+            else:
+                if not isinstance(temp_constants, (dict, OrderedDict)):
+                    raise TypeError(f'Invalid data of constants inside "{structure}"')
+                def invalid_constant(key):
+                    raise KeyError(f'Invalid any-project constant {key}')
+                def valid_constant(key, val):
+                    pinfo(f'Adding any-project constant "{key}={val}"')
+                    return Constant(val)
+                k_pat = r'^[a-z_][a-z0-9_]*$'
+                constants = type('Constants', (object, ), {
+                    key.strip() : valid_constant(key.strip(), val) \
+                        if re.match(k_pat, key.strip(), flags=re.I) \
+                            else invalid_constant(key.strip()) \
+                                for key, val in temp_constants.items()              
+                })
+        except (TypeError, KeyError) as e:
+            perror(f'{e}')
+            return BuildActionData(status=False)
+        
+        # Get the project root path
+        root = os.path.relpath(os.path.join(working_dir, project_name))
+        
+        # Take the safety backup
+        backup_zip, error_occured = InternalActions.take_safe_backup(
+            working_dir, project_name
+        )
+        if error_occured:
+            return BuildActionData(
+                status=False,
+                root=root,
+                cwd=working_dir,
+                backup_zip=backup_zip,
+                delete_backup=True if os.path.isfile(
+                    '' if backup_zip is None else backup_zip) \
+                         else False
+            )
+        
+        # Get the action's architecture
+        action = None
+        setup_obj = None
+        try:
+            if action_name in yaml_data['boilerplates'].keys():
+                action = yaml_data['boilerplates'][action_name]
+            else:
+                raise KeyError(f'Could not find the action "{action_name}"')
+        except KeyError as e:
+            perror(f'{type(e).__name__} occurred -> {e}')
+            return BuildActionData(
+                status=False,
+                root=root,
+                cwd=working_dir,
+                backup_zip=backup_zip,
+                delete_backup=delete_backup
+            )
+        
+        # Get the setup code from yaml
+        setup_code = action.get('setup')
+        if setup_code is not None:
+            # Validation of setup code
+            if not isinstance(setup_code, str):
+                perror(f'Invalid setup code in action "{action_name}"')
+                pinfo('Setup code should be a valid python code')
+                return BuildActionData(
+                    status=False,
+                    root=root,
+                    cwd=working_dir,
+                    backup_zip=backup_zip,
+                    delete_backup=delete_backup
+                )
+
+            # Get the source code, class name and it's location 
+            # in terms of line number in the source code
+            try:
+                actual_source, setup_class_name, class_def_line_no = \
+                    InternalActions.get_setup_source_code(
+                        setup_code, action_name
+                    )
+            except (SyntaxError, ImportError) as e:
+                perror(f'{e}')
+                return BuildActionData(
+                    status=False,
+                    root=root,
+                    cwd=working_dir,
+                    backup_zip=backup_zip,
+                    delete_backup=delete_backup
+                )
+
+            # Execute the setup source code and create object
+            # of the setup class of the action
+            try:
+                exec(actual_source, globals())
+                SetupClass = eval(setup_class_name)
+                if not issubclass(SetupClass, Setup):
+                    raise SyntaxError(
+                        f'Setup class "{SetupClass.__name__}" ' + \
+                            f'at line {class_def_line_no} '+ \
+                                'must inherit from "any_project.Setup" class'
+                    )
+
+                # Creating object of the setup class
+                setup_obj = SetupClass(action_name)
+
+                # Completing the pre-validations of the setup
                 try:
-                    yaml_data = yaml.load(f, Loader=FullLoader)
-                except yaml.scanner.ScannerError as e:
-                    perror(f"{type(e).__name__} -> {e}")
-                    return False
-            project_name = yaml_data.get('project-name')
-            working_dir = yaml_data.get('working-dir')
-            if not isinstance(project_name, str) or not isinstance(working_dir, str):
-                pwarn('Could not find valid data for "project-name" and "working-dir" ' +
-                    f'inside {structure}')
-                return False
-            try:
-                envionment = yaml_data.get('environment', {})
-                if envionment is not None:
-                    if not isinstance(envionment, (dict, OrderedDict)):
-                        raise TypeError(f'Invalid environment variables in "{structure}"')
-                    for env_key, env_val in envionment.items():
-                        pinfo(f'Adding environment variable "{env_key.strip()}": {env_val}')
-                        os.environ[env_key.strip()] = env_val
+                    result = setup_obj.pre_validation()
+                except Exception as e:
+                    raise RuntimeError(
+                        f'<{type(e).__name__}> {e}, while executing' + \
+                            'pre_validation()')
 
-                __constants = yaml_data.get('constants', {})
-                __constants__ = dict()
-                if __constants is not None:
-                    if not isinstance(__constants, (dict, OrderedDict)):
-                        raise TypeError(f'Invalid constant variables in "{structure}"')
-                    for const_key, const_val in __constants.items():
-                        if re.match(r'^[a-z_][a-z0-9_]*$', const_key.strip(), flags=re.I):
-                            pinfo(f'Adding constant variable "{const_key.strip()}": {const_val}')
-                            __constants__[const_key.strip()] = const_val
-                        else:
-                            raise KeyError(f'Could not create constant variable "{const_key.strip()}"')
-                    constants = type('Constants', (object, ), {
-                        key : Constant(val) for key, val in __constants__.items()
-                    })
-                else:
-                    constants = None
-                working_dir = os.path.relpath(working_dir)
-                root = os.path.relpath(os.path.join(working_dir, project_name))
+                if not isinstance(result, ValidationResult):
+                    result = ValidationResult(
+                        False, 'Illegal type of pre-validation result.'
+                    )
+                if not result.successful:
+                    raise ValidationError(result.message)
                 
-                backup_zip = InternalActions.take_safe_backup(working_dir, project_name)
-
-                if action_name in yaml_data['boilerplates'].keys():
-                    action = yaml_data['boilerplates'][action_name]
-                else:
-                    raise KeyError('Could not find the boilerplate structure ' +
-                        f'for action "{action_name}"')
-                setup_code = action.get('setup')
-                setup_obj = None
-                class_def_line_no = 0
-                if setup_code is not None:
-                    if not isinstance(setup_code, str):
-                        raise TypeError('setup_code should be a valid python source ' +
-                            f'code in action "{action_name}"')
-                    else:
-                        source_code_tree = ast.parse(setup_code)
-                        setup_class_name = f'{action_name.strip().title()}Setup'
-                        actual_source = ''
-                        for code_obj in source_code_tree.body:
-                            if isinstance(code_obj, ast.Import):
-                                if not InternalActions.is_forbidden_import(code_obj):
-                                    actual_source += f'\n{ast.get_source_segment(setup_code, code_obj)}'
-                                else:
-                                    raise ImportError(f'Forbidden import at line {code_obj.lineno} -> ' +
-                                        f'"{ast.get_source_segment(setup_code, code_obj)}"')
-                            elif isinstance(code_obj, ast.ImportFrom):
-                                if not InternalActions.is_forbidden_importfrom(code_obj):
-                                    actual_source += f'\n{ast.get_source_segment(setup_code, code_obj)}'
-                                else:
-                                    raise ImportError(f'Forbidden import at line {code_obj.lineno} -> ' +
-                                        f'"{ast.get_source_segment(setup_code, code_obj)}"')
-                            elif isinstance(code_obj, ast.ClassDef):
-                                if code_obj.name == setup_class_name:
-                                    actual_source += f'\n\n{ast.get_source_segment(setup_code, code_obj)}'
-                                    class_def_line_no = code_obj.lineno
-                                else:
-                                    raise SyntaxWarning('Forbidden class definition at line ' +
-                                        f'{code_obj.lineno} -> "{code_obj.name}"')
-                            else:
-                                raise SyntaxWarning(f'Invalid code definition at line {code_obj.lineno}')
-
-                    exec(actual_source, globals())
-                    SetupClass = eval(setup_class_name)
-                    if not issubclass(SetupClass, Setup):
-                        raise SyntaxWarning(f'Setup class "{setup_class_name}" ' +
-                            f'at line {class_def_line_no} '+
-                            'must inherit from "any_project.Setup" class')
-                    setup_obj = SetupClass(action_name)
-                    setup_obj.pre_validations()
+                # Asking the prompt value from the user
+                try:
                     setup_obj.set_prompts()
-                    for task in (tasks.split(';') if tasks is not None else []):
-                        setup_obj.on_task(task=task)
+                except Exception as e:
+                    raise RuntimeError(
+                        f'<{type(e).__name__}> {e}, while executing ' + \
+                            'set_prompts()')
 
-                structure_ = action.get('structure', {})
-                if structure_ is not None:
-                    if not isinstance(structure_, (dict, OrderedDict)):
-                        raise TypeError(f'Invalid file structure_ for action "{action_name}"')
-                    else:
-                        if not os.path.isdir(root):
-                            pinfo(f'Creating ROOT directory: "{root}"')
-                        os.makedirs(root, exist_ok=True)
-                        if not InternalActions.expand_file_structure( \
-                            root, structure_, setup_obj, constants):
-                            InternalActions.restore_safe_backup( \
-                                root, working_dir, backup_zip)
-                            return False
-                        else:
-                            git_commit = action.get('git-commit')
-                            try:
-                                is_git_repo = constants.git_repo
-                                if not isinstance(is_git_repo, bool): is_git_repo = False
-                            except AttributeError:
-                                is_git_repo = False
-                            if not isinstance(git_commit, str):
-                                if git_commit is None and action_name.strip() == 'default':
-                                    git_commit = 'Initial commit'
-                                else:
-                                    if is_git_repo:
-                                        pwarn(f'Value of "git-commit" under "{action_name}"' +
-                                            ' should be a string')
-                                    git_commit = None
-                            if is_git_repo and git_commit is not None:
-                                success, exc = InternalActions.add_git_commit(root, git_commit)
-                                if not success:
-                                    perror(f"{type(exc).__name__} -> {exc}")
-                if setup_obj is not None:
-                    setup_obj.post_validations()                    
-            except (KeyError, TypeError) as e:
-                perror(f"{type(e).__name__} -> {e}")
-                return False
-        if delete_backup_on_success is None \
-            and backup_zip is not None and os.path.isfile(backup_zip):
-            should_delete_backup = ask('Do you want to delete the backup zip?', \
-                choices=['yes', 'no'], default='no', on_error=lambda *argv: True)
-            delete_backup_on_success = should_delete_backup == 'yes'
-        else:
-            delete_backup_on_success = False
-        if delete_backup_on_success:
-            pinfo(f'Deleting backup "{backup_zip}"')
-            try:
-                os.unlink(backup_zip)
-            except (FileNotFoundError, PermissionError) as e:
+                # Executing all the tasks
+                for task in ([] if tasks is None else tasks.split(';')):
+                    try:
+                        setup_obj.on_task(task=task)
+                    except Exception as e:
+                        raise RuntimeError(
+                            f'<{type(e).__name__}> {e}, while executing' + \
+                                f'on_task(task="{task}")')
+            except (SyntaxError, ValidationError, RuntimeError) as e:
+                # Handling RuntimeError is important to prevent any
+                # mess up of the code, after the setup functions
+                # get any exception
                 perror(f'{type(e).__name__} occurred -> {e}')
-                pwarn(f'Could not delete the backup "{backup_zip}"')
-        return True
+                return BuildActionData(
+                    status=False,
+                    root=root,
+                    cwd=working_dir,
+                    backup_zip=backup_zip,
+                    delete_backup=delete_backup
+                )
+
+        # Get the structure from yaml
+        structure_ = action.get('structure')
+        if structure_ is not None:
+            if not isinstance(structure_, (dict, OrderedDict)):
+                perror(f'Invalid file structure in action "{action_name}"')
+                return BuildActionData(
+                    status=False,
+                    root=root,
+                    cwd=working_dir,
+                    backup_zip=backup_zip,
+                    delete_backup=delete_backup
+                )
+            
+            # Creating the ROOT directory if does not exist
+            if not os.path.isdir(root):
+                pinfo(f'Creating ROOT directory: "{root}"')
+            os.makedirs(root, exist_ok=True)
+
+            # Expand the file structure
+            if not InternalActions.expand_file_structure( \
+                root, structure_, setup_obj, constants):
+                perror('Could not expand the file structure!')
+                return BuildActionData(
+                    status=False,
+                    root=root,
+                    cwd=working_dir,
+                    backup_zip=backup_zip,
+                    delete_backup=delete_backup
+                )
+            
+            # Git repo functionality
+            try:
+                is_git_repo = constants.git_repo
+                if not isinstance(is_git_repo, bool):
+                    is_git_repo = False
+            except AttributeError:
+                is_git_repo = False
+
+            # Get the git commit message
+            git_commit = action.get('git-commit')
+        
+            if not isinstance(git_commit, str):
+                # Handle invalid value of git-commit
+                if git_commit is None and \
+                    action_name.strip() == 'default':
+                    git_commit = 'Commit for default action'
+                else:
+                    if is_git_repo:
+                        pwarn(
+                            f'Value of "git-commit" under ' + \
+                                f'"{action_name}" action should be a string'
+                        )
+                    git_commit = None
+            if is_git_repo and git_commit is not None:
+                git_commit = os.path.expandvars(git_commit).format(
+                    prompts = None if setup_obj \
+                        is None else setup_obj.prompts,
+                    consts = constants
+                )
+
+                # Create a git repo if does not exist
+                # and add the files with a commit message
+                exc = InternalActions.add_git_commit(
+                    root, git_commit
+                )
+                if exc is not None:
+                    perror(f"{type(exc).__name__} occurred -> {exc}")
+                    pwarn('Commit may not be occurred successfully!')
+                    # Even if git commit is failed, it should not be 
+                    # rolled back. If rolling back is necessary, it
+                    # can be done using post-validation
+
+        # Do the post build validations
+        if setup_obj is not None:
+            try:
+                try:
+                    result = setup_obj.post_validation()
+                except Exception as e:
+                    raise RuntimeError(
+                        f'<{type(e).__name__}> {e}, while executing ' + \
+                            'post_validtion()')
+                if not isinstance(result, ValidationResult):
+                    result = ValidationResult(
+                        False, 'Illegal type of post-validation result.'
+                    )
+                if not result.successful:
+                    raise ValidationError(result.message)
+            except (ValidationError, RuntimeError) as e:
+                perror(f'{type(e).__name__} occurred -> {e}')
+                return BuildActionData(
+                    status=False,
+                    root=root,
+                    cwd=working_dir,
+                    backup_zip=backup_zip,
+                    delete_backup=delete_backup
+                )
+
+        return BuildActionData(
+            status=True,
+            root=root,
+            cwd=working_dir,
+            backup_zip=backup_zip,
+            delete_backup=delete_backup 
+        )

@@ -60,4 +60,17 @@ boilerplates:
             components:
                 templates:
                     README.md: |
-                        -2: hhh
+                        -2: This line should replace the existing line
+    error:
+        setup: |
+            from any_project import DefaultSetup
+            
+            class ErrorSetup(DefaultSetup):
+                def post_validation(self):
+                    input()
+                    raise Exception('Ohhhhh!')
+        structure:
+            components:
+                templates:
+                    app.py: |
+                        +2: import os               
