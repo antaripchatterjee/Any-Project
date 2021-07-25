@@ -15,15 +15,21 @@ def main():
         load_dotenv(dotenv_path=dotenv_path)
     parser = ArgumentParser(prog=__program__, description=__desc__)
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('-init', action='store', type=str, default=None, \
+    group.add_argument('-init', '-i', action='store', type=str, default=None, \
         help='Initialize a project')
-    group.add_argument('-build', action='store', type=str, default=None, \
+    group.add_argument('-build', '-b', action='store', type=str, default=None, \
         help='Build a project from a initialized yaml code')
+    parser.add_argument('-task', '-t', dest='tasks', action='append', \
+        default=[], help='''Specify tasks to run while building,
+        only usable with `build` option.
+    ''')
     parser.add_argument('-v', action='version', version='%(prog)s - ' + __version__)
     parser.add_argument('-version', action='version', version=__version__)
     results = parser.parse_args()
 
     if results.init is not None:
+        if len(results.tasks) > 0:
+            parser.error('argument `-task` can only be used with `-build`')
         pattern = r'^([^\:]+)(?:\:([a-z0-9_][a-z0-9_\-]*))?$'
         m = re.match(pattern, results.init.strip(), flags=re.IGNORECASE)
         if m is None:
@@ -41,15 +47,18 @@ def main():
         else:
             pinfo(f'Project structure created at "{project_structure_yaml}"')
     else:
-        pattern = r'^([^\:\?]+)(?:\:([a-z_][a-z0-9_]*))?' + \
-            '(?:\?((?:[a-z_][a-z_0-9]*)(?:\;[a-z_][a-z0-9_]*)*))?$'
-        m = re.match(pattern, results.build.strip(), flags=re.IGNORECASE)
+        tasks = [] if results.tasks is None else results.tasks
+        pattern = r'^[\s]*([^\:\?]+)(?:\:([a-z_][a-z0-9_]*))?[\s]*$' # + \
+            # '(?:\?((?:[a-z_][a-z_0-9]*)(?:\;[a-z_][a-z0-9_]*)*))?$'
+        m = re.match(pattern, results.build, flags=re.IGNORECASE)
         if m is None:
             parser.error('argument value of `-build` is invalid')
         else:
-            target_dir, action_name, tasks = m.groups()
+            # target_dir, action_name, tasks = m.groups()
+            project_dir, action_name = m.groups()
             if action_name is None:
                 action_name = 'default'
-        target_dir = os.path.abspath(target_dir)
-        value = os.path.join(target_dir, 'project-structure.yaml')
-        Actions.build(value, action_name, tasks)
+        project_dir = os.path.abspath(project_dir)
+        structure_yaml = os.path.join(project_dir, 'project-structure.yaml')
+        print(structure_yaml, action_name, tasks)
+        Actions.build(structure_yaml, action_name, tasks)

@@ -196,7 +196,7 @@ class Actions(object):
                             'set_prompts()')
 
                 # Executing all the tasks
-                for task in ([] if tasks is None else tasks.split(';')):
+                for task in tasks:
                     try:
                         setup_obj.on_task(task=task)
                     except Exception as e:
