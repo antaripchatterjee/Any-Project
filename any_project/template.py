@@ -17,7 +17,7 @@ def default_yaml_template(project_name, working_dir):
                 ('version', '0.0.1'),
                 ('license', getenv('PROJECT_LICENSE')),
                 ('creation_utctime', datetime.utcnow().strftime(r'%d-%b-%Y %H:%M:%S UTC+0:00')),
-                ('creation_localtime', datetime.now().strftime(r'%d-%b-%Y %H:%M:%S T{S}{HH}:{MM}'.format(
+                ('creation_localtime', datetime.now().strftime(r'%d-%b-%Y %H:%M:%S TZ{S}{HH}:{MM}'.format(
                     S='+' if utc_offset <= 0 else '-',
                     HH=int(abs(utc_offset)/3600),
                     MM=int((abs(utc_offset)%3600)/60)

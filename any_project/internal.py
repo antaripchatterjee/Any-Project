@@ -59,36 +59,37 @@ class InternalActions(object):
             return e
 
     @staticmethod
-    def get_overwriting_content(filename, new_content):
+    def get_overwriting_content(filename, lineno, overwriting_content, force_overwrite):
         existing_file_lines = open(filename).read().split('\n')
-        new_lines_to_write = new_content.split('\n')
-        pattern = r'^(?:[\s]*([-+]\d+)[\s]*[\:][\s]?)?(.*)$'
-        actual_index = 0
-        for temp in new_lines_to_write:
-            if temp.rstrip() != '':
-                actual_index += 1
-                m = re.match(pattern, temp)
-                line, data = m.groups()
-                if line is None:
-                    if actual_index == 1: return new_content
-                    line = '0'
-                line = int(line)
-                if data is None:
-                    data = ''
+        overwriting_lines = overwriting_content.split('\n')
+        
+        if lineno == 0: lineno = len(existing_file_lines) + 1
 
-                if abs(line) > len(existing_file_lines):
-                    line = 0
+        if existing_file_lines[abs(lineno)-1:abs(lineno)+len(overwriting_lines)-1] \
+            == overwriting_lines and not force_overwrite: return None
 
-                if line == 0:
-                    existing_file_lines.append(data)
-                elif line < 0:
-                    if data.strip() == '':
-                        existing_file_lines.pop(abs(line) - 1)
-                    else:
-                        existing_file_lines[abs(line)-1] = data
-                elif line > 0:
-                    existing_file_lines.insert(abs(line)-1, data)
-        return '\n'.join(existing_file_lines)
+        # If lineno is negative, update the line
+        # Else if lineno is positive, insert the line
+        # Else if lineno is 0, append the content
+
+        if lineno < 0:
+            # Update
+            lineno = abs(lineno)
+            if lineno <= len(existing_file_lines):
+                overwriting_file_lines = existing_file_lines[:lineno-1] + \
+                    overwriting_lines + existing_file_lines[lineno+len(overwriting_lines)-1:]
+            else:
+                overwriting_file_lines = existing_file_lines + \
+                    [0]*(lineno-len(existing_file_lines)-1) + overwriting_lines
+        else:
+            # Insert
+            if lineno <= len(existing_file_lines):
+                overwriting_file_lines = existing_file_lines[:lineno-1] + \
+                    overwriting_lines + existing_file_lines[lineno-1:]
+            else:
+                overwriting_file_lines = existing_file_lines + \
+                    [0]*(lineno-len(existing_file_lines)-1) + overwriting_lines
+        return '\n'.join(overwriting_file_lines)
 
     @staticmethod
     def expand_file_structure(root, structure, setup_obj, constants):
@@ -131,35 +132,47 @@ class InternalActions(object):
                     return False
             try:
                 if isinstance(val, str):
-                    new_file = os.path.relpath(os.path.join(root, key))
+                    _pat_i = r'\/\\\*\?\:\"\<\>\|'
+                    pattern = r'^([^\s{0}][^\/\\\*\?\:\"\<\>\|]+[^\s{0}])(?:\s*\:([\+\-]?[\d]+)([fF])?)?$'.format(_pat_i)
+                    m = re.match(pattern, key)
+                    try:
+                        filename, lineno, force_overwrite = m.groups()
+                    except AttributeError:
+                        perror(f'Issue found with filename, invalid key "{key}"')
+                        return False
+                    next_file = os.path.relpath(os.path.join(root, filename))
                     if setup_obj is None:
                         write_file = True
                     else:
                         try:
-                            write_file = setup_obj.on_create_file(new_file)
+                            write_file = setup_obj.on_create_file(next_file)
                         except Exception as e:
                             raise RuntimeError(
                                 f'<{type(e).__name__}> {e}, while executing ' + \
-                                    f'on_create_file(filename="{new_file}")'
+                                    f'on_create_file(filename="{next_file}")'
                             )
                     if write_file:
-                        if os.path.isfile(new_file):
-                            pinfo(f'Overwriting file : {new_file}')
-                            is_new_file = False
+                        if os.path.isfile(next_file):
+                            pinfo(f'Overwriting file : {next_file}')
+                            overwriting = True
                         else:
-                            pinfo(f'Creating file  : {new_file}')
-                            is_new_file = True
+                            pinfo(f'Creating file  : {next_file}')
+                            overwriting = False
                         try:
-                            content_to_write = os.path.expandvars(val).format(
-                                prompts = None if setup_obj \
-                                    is None else setup_obj.prompts,
+                            content = os.path.expandvars(val).format(
+                                prompts = None if setup_obj is None else setup_obj.prompts,
                                 consts = constants
                             )
-                            if not is_new_file:
-                                content_to_write = InternalActions.get_overwriting_content( \
-                                    new_file, content_to_write)
-                            with open(new_file, 'w') as f:
-                                f.write(content_to_write)
+
+                            # If lineno is None, then overwrite completely
+                            if overwriting and lineno is not None:
+                                content = InternalActions.get_overwriting_content(
+                                    next_file, int(lineno), content, force_overwrite
+                                )
+                            if content is not None:
+                                with open(next_file, 'w') as f:
+                                    f.write(content)
+
                         except (OSError, FileNotFoundError, NotADirectoryError) as e:
                             perror(f'Could not create file - {type(e).__name__}:{e}')
                             return False
@@ -167,81 +180,80 @@ class InternalActions(object):
                             pwarn(f'{type(e).__name__} occurred while writing the file')
                             perror(f"Message: {e}")
                             return False
-                else:
-                    if val is None:
-                        new_folder = os.path.relpath(os.path.join(root, key))
-                        if setup_obj is None:
-                            write_directory = True
-                        else:
-                            try:
-                                write_directory = setup_obj.on_create_folder(new_folder)
-                            except Exception as e:
-                                raise RuntimeError(
-                                    f'<{type(e).__name__}> {e}, while executing ' + \
-                                        f'on_create_folder(directory="{new_folder}")'
-                                )
-                        if write_directory:
-                            if not os.path.isdir(new_folder):
-                                pinfo(f'Creating folder: {new_folder}')
-                            try:
-                                os.makedirs(new_folder, exist_ok=True)
-                            except (OSError, FileNotFoundError, NotADirectoryError) as e:
-                                perror(f'Could not create folder - {type(e).__name__}:{e}')
+                elif val is None:
+                    new_folder = os.path.relpath(os.path.join(root, key))
+                    if setup_obj is None:
+                        write_directory = True
+                    else:
+                        try:
+                            write_directory = setup_obj.on_create_folder(new_folder)
+                        except Exception as e:
+                            raise RuntimeError(
+                                f'<{type(e).__name__}> {e}, while executing ' + \
+                                    f'on_create_folder(directory="{new_folder}")'
+                            )
+                    if write_directory:
+                        if not os.path.isdir(new_folder):
+                            pinfo(f'Creating folder: {new_folder}')
+                        try:
+                            os.makedirs(new_folder, exist_ok=True)
+                        except (OSError, FileNotFoundError, NotADirectoryError) as e:
+                            perror(f'Could not create folder - {type(e).__name__}:{e}')
+                            return False
+                elif isinstance(val, (dict, OrderedDict)):
+                    new_folder = os.path.relpath(os.path.join(root, key))
+                    if setup_obj is None:
+                        write_directory = True
+                    else:
+                        try:
+                            write_directory = setup_obj.on_create_folder(new_folder)
+                        except Exception as e:
+                            raise RuntimeError(
+                                f'<{type(e).__name__}> {e}, while executing ' + \
+                                    f'on_create_folder(directory="{new_folder}")'
+                            )
+                    if write_directory:
+                        if not os.path.isdir(new_folder):
+                            pinfo(f'Creating folder: {new_folder}')
+                        try:
+                            os.makedirs(new_folder, exist_ok=True)
+                            if not InternalActions.expand_file_structure(\
+                                new_folder, val, setup_obj, constants):
                                 return False
-                    elif isinstance(val, (dict, OrderedDict)):
-                        new_folder = os.path.relpath(os.path.join(root, key))
-                        if setup_obj is None:
-                            write_directory = True
-                        else:
-                            try:
-                                write_directory = setup_obj.on_create_folder(new_folder)
-                            except Exception as e:
-                                raise RuntimeError(
-                                    f'<{type(e).__name__}> {e}, while executing ' + \
-                                        f'on_create_folder(directory="{new_folder}")'
-                                )
-                        if write_directory:
-                            if not os.path.isdir(new_folder):
-                                pinfo(f'Creating folder: {new_folder}')
-                            try:
-                                os.makedirs(new_folder, exist_ok=True)
-                                if not InternalActions.expand_file_structure(\
-                                    new_folder, val, setup_obj, constants):
-                                    return False
-                            except (OSError, FileNotFoundError, NotADirectoryError) as e:
-                                perror(f'Could not create folder - {type(e).__name__}:{e}')
+                        except (OSError, FileNotFoundError, NotADirectoryError) as e:
+                            perror(f'Could not create folder - {type(e).__name__}:{e}')
+                            return False
+                elif isinstance(val, (tuple, list)):
+                    new_folder = os.path.relpath(os.path.join(root, key))
+                    if setup_obj is None:
+                        write_directory = True
+                    else:
+                        try:
+                            write_directory = setup_obj.on_create_folder(new_folder)
+                        except Exception as e:
+                            raise RuntimeError(
+                                f'<{type(e).__name__}> {e}, while executing ' + \
+                                    f'on_create_folder(directory="{new_folder}")'
+                            )
+                    if write_directory:
+                        if not os.path.isdir(new_folder):
+                            pinfo(f'Creating folder: {new_folder}')
+                        try:
+                            os.makedirs(new_folder, exist_ok=True)
+                            final_inner_value = {}
+                            for val_ in val:
+                                if isinstance(val_, (dict, OrderedDict)):
+                                    for key_ in val_.keys():
+                                        if key_ in final_inner_value.keys():
+                                            pwarn(f'Can not create duplicate folder {key_} inside {new_folder}')
+                                            return False
+                                    final_inner_value.update(val_)
+                            if not InternalActions.expand_file_structure(
+                                new_folder, final_inner_value, setup_obj, constants):
                                 return False
-                    elif isinstance(val, (tuple, list)):
-                        new_folder = os.path.relpath(os.path.join(root, key))
-                        if setup_obj is None:
-                            write_directory = True
-                        else:
-                            try:
-                                write_directory = setup_obj.on_create_folder(new_folder)
-                            except Exception as e:
-                                raise RuntimeError(
-                                    f'<{type(e).__name__}> {e}, while executing ' + \
-                                        f'on_create_folder(directory="{new_folder}")'
-                                )
-                        if write_directory:
-                            if not os.path.isdir(new_folder):
-                                pinfo(f'Creating folder: {new_folder}')
-                            try:
-                                os.makedirs(new_folder, exist_ok=True)
-                                final_inner_value = {}
-                                for val_ in val:
-                                    if isinstance(val_, (dict, OrderedDict)):
-                                        for key_ in val_.keys():
-                                            if key_ in final_inner_value.keys():
-                                                pwarn(f'Can not create duplicate folder {key_} inside {new_folder}')
-                                                return False
-                                        final_inner_value.update(val_)
-                                if not InternalActions.expand_file_structure(
-                                    new_folder, final_inner_value, setup_obj, constants):
-                                    return False
-                            except (OSError, FileNotFoundError, NotADirectoryError) as e:
-                                perror(f'Could not create folder - {type(e).__name__}:{e}')
-                                return False
+                        except (OSError, FileNotFoundError, NotADirectoryError) as e:
+                            perror(f'Could not create folder - {type(e).__name__}:{e}')
+                            return False
             except RuntimeError as e:
                 perror(f'{type(e).__name__} occurred -> {e}')
                 return False
