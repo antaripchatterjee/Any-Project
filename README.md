@@ -4,7 +4,7 @@ Any-Project is a python module, helps to build any basic skeleton file structure
 
 ## Version
 
-The current version of this module is `0.1.0b0`. It is still in BETA stage and supported in `python 3.6+`.
+The current version of this module is `0.2.0b1`. It is still in BETA stage and supported in `python 3.6+`.
 
 You can check the program's version using the below command.
 
